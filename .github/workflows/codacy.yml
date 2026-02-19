@@ -2,17 +2,20 @@ name: Codacy Security Scan
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master" ]
-
-permissions:
-  contents: read
-  security-events: write
+    branches: ["main", "master"]
 
 jobs:
   codacy-security-scan:
+    name: Run Codacy and prepare SARIF runs
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -24,13 +27,53 @@ jobs:
           gh-code-scanning-compat: true
           max-allowed-issues: 2147483647
 
-      - name: Count SARIF runs
-        id: sarif
-        run: echo "runs=$(jq '.runs | length' results.sarif)" >> "$GITHUB_OUTPUT"
+      - name: Build upload matrix from SARIF runs
+        id: matrix
+        shell: bash
+        run: |
+          RUNS=$(jq '.runs | length' results.sarif)
+          if [ "$RUNS" -eq 0 ]; then
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Create: {"include":[{"run":0},{"run":1},...]}
+          echo "matrix=$(jq -nc --argjson n "$RUNS" '{include:[range(0;n) | {run:.}] }')" >> "$GITHUB_OUTPUT"
 
-      - name: Upload SARIF results
-        if: steps.sarif.outputs.runs != '0'
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codacy-sarif
+          path: results.sarif
+
+  upload-codacy-sarif:
+    name: Upload SARIF runs to GitHub Code Scanning
+    needs: codacy-security-scan
+    runs-on: ubuntu-latest
+    if: ${{ fromJson(needs.codacy-security-scan.outputs.matrix).include[0] != null }}
+    permissions:
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.codacy-security-scan.outputs.matrix) }}
+
+    steps:
+      - name: Download SARIF artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: codacy-sarif
+
+      - name: Extract SARIF run
+        shell: bash
+        run: |
+          idx='${{ matrix.run }}'
+          jq --argjson i "$idx" \
+            '{ "version": .version, "$schema": ."$schema", "runs": [ .runs[$i] ] }' \
+            results.sarif > "results-run-${idx}.sarif"
+
+      - name: Upload SARIF run
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: results.sarif
-          category: codacy
+          sarif_file: results-run-${{ matrix.run }}.sarif
+          category: codacy-${{ matrix.run }}
