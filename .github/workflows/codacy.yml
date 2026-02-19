@@ -27,6 +27,9 @@ jobs:
           gh-code-scanning-compat: true
           max-allowed-issues: 2147483647
 
+          # ✅ Option 2: do not fail the job if some tools (e.g., trivy) fail
+          fail-if-incomplete: false
+
       - name: Build upload matrix from SARIF runs
         id: matrix
         shell: bash
@@ -36,7 +39,6 @@ jobs:
             echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Create: {"include":[{"run":0},{"run":1},...]}
           echo "matrix=$(jq -nc --argjson n "$RUNS" '{include:[range(0;n) | {run:.}] }')" >> "$GITHUB_OUTPUT"
 
       - name: Upload SARIF artifact
